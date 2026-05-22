@@ -1,0 +1,363 @@
+import bytes
+import json
+
+// NBT (Named Binary Tag) parser and writer for Minecraft.
+//
+// Usage:
+//   import nbt
+//   let tag = nbt.parse(data)!        // Bytes → NbtTag
+//   let data = nbt.write(tag)         // NbtTag → Bytes
+//   let val = nbt.to_value(tag)       // NbtTag → Value (JSON-like)
+
+// ── Tag types ───────────────────────────────────────
+
+type NbtTag =
+  | End
+  | Byte(Int)
+  | Short(Int)
+  | NbtInt(Int)
+  | Long(Int)
+  | NbtFloat(Float)
+  | Double(Float)
+  | ByteArray(Bytes)
+  | NbtString(String)
+  | NbtList(List[NbtTag])
+  | Compound(List[(String, NbtTag)])
+  | IntArray(List[Int])
+  | LongArray(List[Int])
+
+type NbtRoot = { name: String, tag: NbtTag }
+
+// ── Parser ──────────────────────────────────────────
+
+type ReadResult = { tag: NbtTag, pos: Int }
+type NamedResult = { name: String, tag: NbtTag, pos: Int }
+
+effect fn parse(data: Bytes) -> NbtRoot = {
+  if bytes.len(data) < 3 then err("NBT data too short")!
+  let type_id = bytes.read_u8(data, 0)
+  if type_id == 0 then err("NBT root is TAG_End")!
+  let name_len = bytes.read_u16_be(data, 1)
+  let name = bytes.to_string_lossy(bytes.slice(data, 3, 3 + name_len))
+  let r = read_tag(data, 3 + name_len, type_id)!
+  { name: name, tag: r.tag }
+}
+
+effect fn parse_network(data: Bytes) -> NbtRoot = {
+  if bytes.len(data) < 1 then err("NBT data too short")!
+  let type_id = bytes.read_u8(data, 0)
+  if type_id == 0 then { name: "", tag: End }
+  else {
+    let r = read_tag(data, 1, type_id)!
+    { name: "", tag: r.tag }
+  }
+}
+
+effect fn read_tag(data: Bytes, pos: Int, type_id: Int) -> ReadResult =
+  match type_id {
+    0 => { tag: End, pos: pos },
+    1 => read_byte(data, pos),
+    2 => read_short(data, pos),
+    3 => read_int(data, pos),
+    4 => read_long(data, pos),
+    5 => read_float(data, pos),
+    6 => read_double(data, pos),
+    7 => read_byte_array(data, pos),
+    8 => read_string(data, pos),
+    9 => read_list(data, pos)!,
+    10 => read_compound(data, pos)!,
+    11 => read_int_array(data, pos),
+    12 => read_long_array(data, pos),
+    _ => err("Unknown NBT tag type: ${int.to_string(type_id)}")!,
+  }
+
+fn read_byte(data: Bytes, pos: Int) -> ReadResult = {
+  let v = bytes.read_u8(data, pos)
+  { tag: Byte(if v > 127 then v - 256 else v), pos: pos + 1 }
+}
+
+fn read_short(data: Bytes, pos: Int) -> ReadResult =
+  { tag: Short(bytes.read_i16_be(data, pos)), pos: pos + 2 }
+
+fn read_int(data: Bytes, pos: Int) -> ReadResult =
+  { tag: NbtInt(bytes.read_i32_be(data, pos)), pos: pos + 4 }
+
+fn read_long(data: Bytes, pos: Int) -> ReadResult =
+  { tag: Long(bytes.read_i64_be(data, pos)), pos: pos + 8 }
+
+fn read_float(data: Bytes, pos: Int) -> ReadResult =
+  { tag: NbtFloat(bytes.read_f32_be(data, pos)), pos: pos + 4 }
+
+fn read_double(data: Bytes, pos: Int) -> ReadResult =
+  { tag: Double(bytes.read_f64_be(data, pos)), pos: pos + 8 }
+
+fn read_byte_array(data: Bytes, pos: Int) -> ReadResult = {
+  let len = bytes.read_i32_be(data, pos)
+  { tag: ByteArray(bytes.slice(data, pos + 4, pos + 4 + len)), pos: pos + 4 + len }
+}
+
+fn read_string(data: Bytes, pos: Int) -> ReadResult = {
+  let len = bytes.read_u16_be(data, pos)
+  let s = bytes.to_string_lossy(bytes.slice(data, pos + 2, pos + 2 + len))
+  { tag: NbtString(s), pos: pos + 2 + len }
+}
+
+effect fn read_list(data: Bytes, pos: Int) -> ReadResult = {
+  let elem_type = bytes.read_u8(data, pos)
+  let len = bytes.read_i32_be(data, pos + 1)
+  var items: List[NbtTag] = []
+  var p = pos + 5
+  var i = 0
+  while i < len {
+    let r = read_tag(data, p, elem_type)!
+    items = items + [r.tag]
+    p = r.pos
+    i = i + 1
+  }
+  { tag: NbtList(items), pos: p }
+}
+
+effect fn read_compound(data: Bytes, pos: Int) -> ReadResult = {
+  var entries: List[(String, NbtTag)] = []
+  var p = pos
+  var done = false
+  while not done {
+    let type_id = bytes.read_u8(data, p)
+    if type_id == 0 then { p = p + 1; done = true }
+    else {
+      let name_len = bytes.read_u16_be(data, p + 1)
+      let name = bytes.to_string_lossy(bytes.slice(data, p + 3, p + 3 + name_len))
+      let r = read_tag(data, p + 3 + name_len, type_id)!
+      entries = entries + [(name, r.tag)]
+      p = r.pos
+    }
+  }
+  { tag: Compound(entries), pos: p }
+}
+
+fn read_int_array(data: Bytes, pos: Int) -> ReadResult = {
+  let len = bytes.read_i32_be(data, pos)
+  var items: List[Int] = []
+  var p = pos + 4
+  var i = 0
+  while i < len {
+    items = items + [bytes.read_i32_be(data, p)]
+    p = p + 4
+    i = i + 1
+  }
+  { tag: IntArray(items), pos: p }
+}
+
+fn read_long_array(data: Bytes, pos: Int) -> ReadResult = {
+  let len = bytes.read_i32_be(data, pos)
+  var items: List[Int] = []
+  var p = pos + 4
+  var i = 0
+  while i < len {
+    items = items + [bytes.read_i64_be(data, p)]
+    p = p + 8
+    i = i + 1
+  }
+  { tag: LongArray(items), pos: p }
+}
+
+// ── Writer ──────────────────────────────────────────
+
+fn write(root: NbtRoot) -> Bytes = {
+  let type_id = tag_type_id(root.tag)
+  let name_bytes = bytes.from_string(root.name)
+  var out = bytes.from_list([type_id])
+  out = write_u16_be(out, bytes.len(name_bytes))
+  out = bytes.concat(out, name_bytes)
+  write_tag(out, root.tag)
+}
+
+fn write_network(tag: NbtTag) -> Bytes = {
+  var out = bytes.from_list([tag_type_id(tag)])
+  write_tag(out, tag)
+}
+
+fn tag_type_id(tag: NbtTag) -> Int =
+  match tag {
+    End => 0, Byte(_) => 1, Short(_) => 2, NbtInt(_) => 3,
+    Long(_) => 4, NbtFloat(_) => 5, Double(_) => 6,
+    ByteArray(_) => 7, NbtString(_) => 8, NbtList(_) => 9,
+    Compound(_) => 10, IntArray(_) => 11, LongArray(_) => 12,
+  }
+
+fn write_tag(out: Bytes, tag: NbtTag) -> Bytes =
+  match tag {
+    End => out,
+    Byte(v) => bytes.concat(out, bytes.from_list([int.band(v, 0xFF)])),
+    Short(v) => write_i16_be(out, v),
+    NbtInt(v) => write_i32_be(out, v),
+    Long(v) => write_i64_be(out, v),
+    NbtFloat(v) => write_f32_be(out, v),
+    Double(v) => write_f64_be(out, v),
+    ByteArray(b) => bytes.concat(write_i32_be(out, bytes.len(b)), b),
+    NbtString(s) => write_nbt_string(out, s),
+    NbtList(items) => write_list(out, items),
+    Compound(entries) => write_compound(out, entries),
+    IntArray(items) => write_int_array(out, items),
+    LongArray(items) => write_long_array(out, items),
+  }
+
+fn write_nbt_string(out: Bytes, s: String) -> Bytes = {
+  let b = bytes.from_string(s)
+  bytes.concat(write_u16_be(out, bytes.len(b)), b)
+}
+
+fn write_list(out: Bytes, items: List[NbtTag]) -> Bytes = {
+  let elem_type = match list.first(items) { some(t) => tag_type_id(t), none => 0 }
+  var o = bytes.concat(bytes.from_list([elem_type]) |> ((b) => bytes.concat(out, b)), bytes.new(0))
+  o = write_i32_be(o, list.len(items))
+  list.fold(items, o, (acc, item) => write_tag(acc, item))
+}
+
+fn write_compound(out: Bytes, entries: List[(String, NbtTag)]) -> Bytes = {
+  let o = list.fold(entries, out, (acc, entry) => {
+    let (name, tag) = entry
+    let type_byte = bytes.from_list([tag_type_id(tag)])
+    let name_bytes = bytes.from_string(name)
+    var a = bytes.concat(acc, type_byte)
+    a = write_u16_be(a, bytes.len(name_bytes))
+    a = bytes.concat(a, name_bytes)
+    write_tag(a, tag)
+  })
+  bytes.concat(o, bytes.from_list([0]))
+}
+
+fn write_int_array(out: Bytes, items: List[Int]) -> Bytes = {
+  let o = write_i32_be(out, list.len(items))
+  list.fold(items, o, (acc, v) => write_i32_be(acc, v))
+}
+
+fn write_long_array(out: Bytes, items: List[Int]) -> Bytes = {
+  let o = write_i32_be(out, list.len(items))
+  list.fold(items, o, (acc, v) => write_i64_be(acc, v))
+}
+
+// ── Value conversion ────────────────────────────────
+
+fn to_value(tag: NbtTag) -> Value =
+  match tag {
+    End => value.null(),
+    Byte(v) => value.int(v),
+    Short(v) => value.int(v),
+    NbtInt(v) => value.int(v),
+    Long(v) => value.int(v),
+    NbtFloat(v) => value.float(v),
+    Double(v) => value.float(v),
+    ByteArray(b) => value.array(bytes.to_list(b) |> list.map((x) => value.int(x))),
+    NbtString(s) => value.str(s),
+    NbtList(items) => value.array(items |> list.map((t) => to_value(t))),
+    Compound(entries) => value.object(entries |> list.map((e) => { let (k, v) = e; (k, to_value(v)) })),
+    IntArray(items) => value.array(items |> list.map((x) => value.int(x))),
+    LongArray(items) => value.array(items |> list.map((x) => value.int(x))),
+  }
+
+// ── Byte helpers ────────────────────────────────────
+
+fn write_u16_be(out: Bytes, v: Int) -> Bytes =
+  bytes.concat(out, bytes.from_list([int.band(int.bshr(v, 8), 0xFF), int.band(v, 0xFF)]))
+
+fn write_i16_be(out: Bytes, v: Int) -> Bytes = write_u16_be(out, int.band(v, 0xFFFF))
+
+fn write_i32_be(out: Bytes, v: Int) -> Bytes =
+  bytes.concat(out, bytes.from_list([
+    int.band(int.bshr(v, 24), 0xFF), int.band(int.bshr(v, 16), 0xFF),
+    int.band(int.bshr(v, 8), 0xFF), int.band(v, 0xFF),
+  ]))
+
+fn write_i64_be(out: Bytes, v: Int) -> Bytes =
+  bytes.concat(out, bytes.from_list([
+    int.band(int.bshr(v, 56), 0xFF), int.band(int.bshr(v, 48), 0xFF),
+    int.band(int.bshr(v, 40), 0xFF), int.band(int.bshr(v, 32), 0xFF),
+    int.band(int.bshr(v, 24), 0xFF), int.band(int.bshr(v, 16), 0xFF),
+    int.band(int.bshr(v, 8), 0xFF), int.band(v, 0xFF),
+  ]))
+
+fn write_f32_be(out: Bytes, v: Float) -> Bytes = {
+  let bits = float.to_bits(v)
+  let f32_bits = int.band(int.bshr(bits, 32), 0xFFFFFFFF)
+  write_i32_be(out, f32_bits)
+}
+fn write_f64_be(out: Bytes, v: Float) -> Bytes = write_i64_be(out, float.to_bits(v))
+
+// ── Tests ───────────────────────────────────────────
+
+test "roundtrip byte" {
+  let root: NbtRoot = { name: "test", tag: Byte(42) }
+  let data = write(root)
+  let parsed = parse(data)!
+  assert_eq(parsed.name, "test")
+  match parsed.tag { Byte(v) => assert_eq(v, 42), _ => assert(false) }
+}
+
+test "roundtrip compound" {
+  let root: NbtRoot = { name: "root", tag: Compound([
+    ("name", NbtString("Steve")),
+    ("health", Short(20)),
+    ("pos", NbtList([Double(1.0), Double(64.0), Double(1.0)])),
+  ])}
+  let data = write(root)
+  let parsed = parse(data)!
+  match parsed.tag {
+    Compound(entries) => {
+      assert_eq(list.len(entries), 3)
+      let (k0, v0) = list.get(entries, 0) ?? ("", End)
+      assert_eq(k0, "name")
+      match v0 { NbtString(s) => assert_eq(s, "Steve"), _ => assert(false) }
+    },
+    _ => assert(false),
+  }
+}
+
+test "roundtrip int array" {
+  let root: NbtRoot = { name: "", tag: IntArray([1, 2, 3, 100]) }
+  let data = write(root)
+  let parsed = parse(data)!
+  match parsed.tag {
+    IntArray(items) => { assert_eq(list.len(items), 4); assert_eq(list.get(items, 3) ?? 0, 100) },
+    _ => assert(false),
+  }
+}
+
+test "roundtrip nested compound" {
+  let root: NbtRoot = { name: "Level", tag: Compound([
+    ("Data", Compound([
+      ("GameType", NbtInt(1)),
+      ("LevelName", NbtString("World")),
+    ])),
+  ])}
+  let data = write(root)
+  let parsed = parse(data)!
+  let v = to_value(parsed.tag)
+  let data_v = value.get(v, "Data") ?? value.null()
+  let name_v = value.get(data_v, "LevelName") ?? value.null()
+  assert_eq(value.as_string(name_v) ?? "", "World")
+}
+
+test "roundtrip empty compound" {
+  let root: NbtRoot = { name: "", tag: Compound([]) }
+  let data = write(root)
+  let parsed = parse(data)!
+  match parsed.tag { Compound(e) => assert_eq(list.len(e), 0), _ => assert(false) }
+}
+
+test "roundtrip byte array" {
+  let root: NbtRoot = { name: "", tag: ByteArray(bytes.from_list([0xDE, 0xAD, 0xBE, 0xEF])) }
+  let data = write(root)
+  let parsed = parse(data)!
+  match parsed.tag {
+    ByteArray(b) => { assert_eq(bytes.len(b), 4); assert_eq(bytes.read_u8(b, 0), 0xDE) },
+    _ => assert(false),
+  }
+}
+
+test "to_value compound" {
+  let tag = Compound([("x", NbtInt(10)), ("y", NbtString("hello"))])
+  let v = to_value(tag)
+  assert_eq(value.as_int(value.get(v, "x") ?? value.null()) ?? 0, 10)
+  assert_eq(value.as_string(value.get(v, "y") ?? value.null()) ?? "", "hello")
+}
