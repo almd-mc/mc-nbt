@@ -64,7 +64,7 @@ local fn read_i32(buf: Bytes, off: Int) -> Int = {
 
 local fn read_i64(buf: Bytes, off: Int) -> Int = {
   var val = 0
-  for i in 0..8 {
+  for i in 0..<8 {
     val = int.bor(int.bshl(val, 8), bytes.get(buf, off + i) ?? 0)
   }
   val
@@ -90,7 +90,7 @@ fn decode_payload(buf: Bytes, off: Int, tag_type: Int) -> { value: Nbt, size: In
     7 => {
       let len = read_i32(buf, off)
       var arr: List[Int] = []
-      for i in 0..len { arr = arr + [bytes.get(buf, off + 4 + i) ?? 0] }
+      for i in 0..<len { arr = arr + [bytes.get(buf, off + 4 + i) ?? 0] }
       { value: ByteArray(arr), size: 4 + len }
     },
     8 => {
@@ -102,7 +102,7 @@ fn decode_payload(buf: Bytes, off: Int, tag_type: Int) -> { value: Nbt, size: In
       let list_len = read_i32(buf, off + 1)
       var items: List[Nbt] = []
       var pos = off + 5
-      for i in 0..list_len {
+      for i in 0..<list_len {
         let item = decode_payload(buf, pos, list_type)
         items = items + [item.value]
         pos = pos + item.size
@@ -131,13 +131,13 @@ fn decode_payload(buf: Bytes, off: Int, tag_type: Int) -> { value: Nbt, size: In
     11 => {
       let len = read_i32(buf, off)
       var arr: List[Int] = []
-      for i in 0..len { arr = arr + [read_i32(buf, off + 4 + i * 4)] }
+      for i in 0..<len { arr = arr + [read_i32(buf, off + 4 + i * 4)] }
       { value: IntArray(arr), size: 4 + len * 4 }
     },
     12 => {
       let len = read_i32(buf, off)
       var arr: List[Int] = []
-      for i in 0..len { arr = arr + [read_i64(buf, off + 4 + i * 8)] }
+      for i in 0..<len { arr = arr + [read_i64(buf, off + 4 + i * 8)] }
       { value: LongArray(arr), size: 4 + len * 8 }
     },
     _ => { value: End, size: 0 },
@@ -173,13 +173,13 @@ local fn write_i16(v: Int) -> Bytes =
 
 local fn write_i32(v: Int) -> Bytes = {
   var buf = bytes.zeros(4)
-  for i in 0..4 { buf = bytes.set(buf, 3 - i, int.band(int.bshr(v, i * 8), 0xFF)) }
+  for i in 0..<4 { buf = bytes.set(buf, 3 - i, int.band(int.bshr(v, i * 8), 0xFF)) }
   buf
 }
 
 local fn write_i64(v: Int) -> Bytes = {
   var buf = bytes.zeros(8)
-  for i in 0..8 { buf = bytes.set(buf, 7 - i, int.band(int.bshr(v, i * 8), 0xFF)) }
+  for i in 0..<8 { buf = bytes.set(buf, 7 - i, int.band(int.bshr(v, i * 8), 0xFF)) }
   buf
 }
 
