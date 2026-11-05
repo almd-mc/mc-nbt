@@ -42,30 +42,30 @@ type Nbt =
 // --- Read helpers (big-endian) ---
 
 local fn read_i8(buf: Bytes, off: Int) -> Int = {
-  let v = bytes.read_u8(buf, off)
+  let v = bytes.get(buf, off) ?? 0
   if v >= 128 then v - 256 else v
 }
 
 local fn read_i16(buf: Bytes, off: Int) -> Int = {
-  let v = int.bor(int.bshl(bytes.read_u8(buf, off), 8), bytes.read_u8(buf, off + 1))
+  let v = int.bor(int.bshl(bytes.get(buf, off) ?? 0, 8), bytes.get(buf, off + 1) ?? 0)
   if v >= 32768 then v - 65536 else v
 }
 
 local fn read_u16(buf: Bytes, off: Int) -> Int =
-  int.bor(int.bshl(bytes.read_u8(buf, off), 8), bytes.read_u8(buf, off + 1))
+  int.bor(int.bshl(bytes.get(buf, off) ?? 0, 8), bytes.get(buf, off + 1) ?? 0)
 
 local fn read_i32(buf: Bytes, off: Int) -> Int = {
   let v = int.bor(
-    int.bor(int.bshl(bytes.read_u8(buf, off), 24), int.bshl(bytes.read_u8(buf, off + 1), 16)),
-    int.bor(int.bshl(bytes.read_u8(buf, off + 2), 8), bytes.read_u8(buf, off + 3))
+    int.bor(int.bshl(bytes.get(buf, off) ?? 0, 24), int.bshl(bytes.get(buf, off + 1) ?? 0, 16)),
+    int.bor(int.bshl(bytes.get(buf, off + 2) ?? 0, 8), bytes.get(buf, off + 3) ?? 0)
   )
   if int.band(v, 0x80000000) != 0 then int.bor(v, -4294967296) else v
 }
 
 local fn read_i64(buf: Bytes, off: Int) -> Int = {
   var val = 0
-  for i in 0..8 {
-    val = int.bor(int.bshl(val, 8), bytes.read_u8(buf, off + i))
+  for i in 0..<8 {
+    val = int.bor(int.bshl(val, 8), bytes.get(buf, off + i) ?? 0)
   }
   val
 }
@@ -85,12 +85,12 @@ fn decode_payload(buf: Bytes, off: Int, tag_type: Int) -> { value: Nbt, size: In
     2 => { value: Short(read_i16(buf, off)), size: 2 },
     3 => { value: NbtInt(read_i32(buf, off)), size: 4 },
     4 => { value: Long(read_i64(buf, off)), size: 8 },
-    5 => { value: NbtFloat(bytes.read_f32_be(buf, off)), size: 4 },
-    6 => { value: Double(bytes.read_f64_be(buf, off)), size: 8 },
+    5 => { value: NbtFloat(bytes.get_f32_be(buf, off) ?? 0.0), size: 4 },
+    6 => { value: Double(bytes.get_f64_be(buf, off) ?? 0.0), size: 8 },
     7 => {
       let len = read_i32(buf, off)
       var arr: List[Int] = []
-      for i in 0..len { arr = arr + [bytes.read_u8(buf, off + 4 + i)] }
+      for i in 0..<len { arr = arr + [bytes.get(buf, off + 4 + i) ?? 0] }
       { value: ByteArray(arr), size: 4 + len }
     },
     8 => {
@@ -98,11 +98,11 @@ fn decode_payload(buf: Bytes, off: Int, tag_type: Int) -> { value: Nbt, size: In
       { value: NbtString(s.value), size: s.size }
     },
     9 => {
-      let list_type = bytes.read_u8(buf, off)
+      let list_type = bytes.get(buf, off) ?? 0
       let list_len = read_i32(buf, off + 1)
       var items: List[Nbt] = []
       var pos = off + 5
-      for i in 0..list_len {
+      for i in 0..<list_len {
         let item = decode_payload(buf, pos, list_type)
         items = items + [item.value]
         pos = pos + item.size
@@ -114,7 +114,7 @@ fn decode_payload(buf: Bytes, off: Int, tag_type: Int) -> { value: Nbt, size: In
       var pos = off
       var done = false
       while not done {
-        let entry_type = bytes.read_u8(buf, pos)
+        let entry_type = bytes.get(buf, pos) ?? 0
         pos = pos + 1
         if entry_type == 0 then {
           done = true
@@ -131,13 +131,13 @@ fn decode_payload(buf: Bytes, off: Int, tag_type: Int) -> { value: Nbt, size: In
     11 => {
       let len = read_i32(buf, off)
       var arr: List[Int] = []
-      for i in 0..len { arr = arr + [read_i32(buf, off + 4 + i * 4)] }
+      for i in 0..<len { arr = arr + [read_i32(buf, off + 4 + i * 4)] }
       { value: IntArray(arr), size: 4 + len * 4 }
     },
     12 => {
       let len = read_i32(buf, off)
       var arr: List[Int] = []
-      for i in 0..len { arr = arr + [read_i64(buf, off + 4 + i * 8)] }
+      for i in 0..<len { arr = arr + [read_i64(buf, off + 4 + i * 8)] }
       { value: LongArray(arr), size: 4 + len * 8 }
     },
     _ => { value: End, size: 0 },
@@ -146,7 +146,7 @@ fn decode_payload(buf: Bytes, off: Int, tag_type: Int) -> { value: Nbt, size: In
 
 // Decode a named root tag (Java Edition network format since 1.20.2: nameless root compound)
 fn decode(buf: Bytes, off: Int) -> { value: Nbt, size: Int } = {
-  let tag_type = bytes.read_u8(buf, off)
+  let tag_type = bytes.get(buf, off) ?? 0
   if tag_type == 0 then { value: End, size: 1 }
   else {
     // Network format (1.20.2+): root compound has no name
@@ -157,7 +157,7 @@ fn decode(buf: Bytes, off: Int) -> { value: Nbt, size: Int } = {
 
 // Decode a named root tag (classic format: type + name + payload)
 fn decode_named(buf: Bytes, off: Int) -> { name: String, value: Nbt, size: Int } = {
-  let tag_type = bytes.read_u8(buf, off)
+  let tag_type = bytes.get(buf, off) ?? 0
   if tag_type == 0 then { name: "", value: End, size: 1 }
   else {
     let name = read_string(buf, off + 1)
@@ -172,20 +172,20 @@ local fn write_i16(v: Int) -> Bytes =
   bytes.from_list([int.band(int.bshr(v, 8), 0xFF), int.band(v, 0xFF)])
 
 local fn write_i32(v: Int) -> Bytes = {
-  var buf = bytes.new(4)
-  for i in 0..4 { buf = bytes.set(buf, 3 - i, int.band(int.bshr(v, i * 8), 0xFF)) }
+  var buf = bytes.zeros(4)
+  for i in 0..<4 { buf = bytes.set(buf, 3 - i, int.band(int.bshr(v, i * 8), 0xFF)) }
   buf
 }
 
 local fn write_i64(v: Int) -> Bytes = {
-  var buf = bytes.new(8)
-  for i in 0..8 { buf = bytes.set(buf, 7 - i, int.band(int.bshr(v, i * 8), 0xFF)) }
+  var buf = bytes.zeros(8)
+  for i in 0..<8 { buf = bytes.set(buf, 7 - i, int.band(int.bshr(v, i * 8), 0xFF)) }
   buf
 }
 
 local fn write_string(s: String) -> Bytes = {
   let str_bytes = bytes.from_string(s)
-  bytes.concat(write_i16(bytes.len(str_bytes)), str_bytes)
+  write_i16(bytes.len(str_bytes)) + str_bytes
 }
 
 // --- Encode ---
@@ -210,51 +210,51 @@ fn tag_type_id(nbt: Nbt) -> Int = {
 
 fn encode_payload(nbt: Nbt) -> Bytes = {
   match nbt {
-    End => bytes.new(0),
+    End => bytes.zeros(0),
     Byte(v) => bytes.from_list([int.band(v, 0xFF)]),
     Short(v) => write_i16(v),
     NbtInt(v) => write_i32(v),
     Long(v) => write_i64(v),
     NbtFloat(v) => {
-      var buf = bytes.new(4)
-      bytes.set_f32_be(buf, 0, v)
+      var buf = bytes.zeros(4)
+      bytes.put_f32_be(buf, 0, v)
       buf
     },
     Double(v) => {
-      var buf = bytes.new(8)
-      bytes.set_f64_be(buf, 0, v)
+      var buf = bytes.zeros(8)
+      bytes.put_f64_be(buf, 0, v)
       buf
     },
     ByteArray(arr) => {
       var buf = write_i32(list.length(arr))
-      for b in arr { buf = bytes.concat(buf, bytes.from_list([int.band(b, 0xFF)])) }
+      for b in arr { buf = buf + bytes.from_list([int.band(b, 0xFF)]) }
       buf
     },
     NbtString(s) => write_string(s),
     NbtList(t, items) => {
       var buf = bytes.from_list([int.band(t, 0xFF)])
-      buf = bytes.concat(buf, write_i32(list.length(items)))
-      for item in items { buf = bytes.concat(buf, encode_payload(item)) }
+      buf = buf + write_i32(list.length(items))
+      for item in items { buf = buf + encode_payload(item) }
       buf
     },
     Compound(entries) => {
-      var buf = bytes.new(0)
+      var buf = bytes.zeros(0)
       for entry in entries {
         let tid = tag_type_id(entry.value)
-        buf = bytes.concat(buf, bytes.from_list([int.band(tid, 0xFF)]))
-        buf = bytes.concat(buf, write_string(entry.name))
-        buf = bytes.concat(buf, encode_payload(entry.value))
+        buf = buf + bytes.from_list([int.band(tid, 0xFF)])
+        buf = buf + write_string(entry.name)
+        buf = buf + encode_payload(entry.value)
       }
-      bytes.concat(buf, bytes.from_list([0x00]))
+      buf + bytes.from_list([0x00])
     },
     IntArray(arr) => {
       var buf = write_i32(list.length(arr))
-      for v in arr { buf = bytes.concat(buf, write_i32(v)) }
+      for v in arr { buf = buf + write_i32(v) }
       buf
     },
     LongArray(arr) => {
       var buf = write_i32(list.length(arr))
-      for v in arr { buf = bytes.concat(buf, write_i64(v)) }
+      for v in arr { buf = buf + write_i64(v) }
       buf
     },
   }
@@ -262,11 +262,11 @@ fn encode_payload(nbt: Nbt) -> Bytes = {
 
 // Encode as network format (type byte + payload, no root name)
 fn encode(nbt: Nbt) -> Bytes =
-  bytes.concat(bytes.from_list([tag_type_id(nbt)]), encode_payload(nbt))
+  bytes.from_list([tag_type_id(nbt)]) + encode_payload(nbt)
 
 // Encode as classic named format (type + name + payload)
 fn encode_named(name: String, nbt: Nbt) -> Bytes =
-  bytes.concat(bytes.from_list([tag_type_id(nbt)]), bytes.concat(write_string(name), encode_payload(nbt)))
+  bytes.from_list([tag_type_id(nbt)]) + (write_string(name) + encode_payload(nbt))
 
 // --- Lookup helpers ---
 
